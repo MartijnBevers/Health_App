@@ -1,7 +1,0 @@
-streamlit
-langgraph
-langchain
-langchain-groq
-libsql-client
-python-dotenv
-pandas

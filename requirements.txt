@@ -1,0 +1,9 @@
+streamlit>=1.38,<2
+langgraph>=0.2,<0.3
+langchain>=0.3,<0.4
+langchain-core>=0.3,<0.4
+langchain-groq>=0.2,<0.3
+libsql-client>=0.3,<0.4
+python-dotenv>=1.0,<2
+pandas>=2.2,<3
+ 
