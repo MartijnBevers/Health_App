@@ -135,6 +135,16 @@ def init_db() -> None:
                 client.execute(
                     f"ALTER TABLE meals ADD COLUMN {column_name} {column_definition}"
                 )
+
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                body_weight_kg REAL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
     finally:
         client.close()
 
@@ -211,5 +221,35 @@ def fetch_all_meals() -> list[dict]:
         result = client.execute("SELECT * FROM meals ORDER BY id DESC")
         columns = result.columns
         return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def get_body_weight_kg() -> float | None:
+    """Return the saved current body weight, if one has been entered."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT body_weight_kg FROM profile WHERE id = 1")
+        if not result.rows:
+            return None
+        return float(result.rows[0][0])
+    finally:
+        client.close()
+
+
+def set_body_weight_kg(body_weight_kg: float) -> None:
+    """Create or update the user's current body weight in kilograms."""
+    client = get_client()
+    try:
+        client.execute(
+            """
+            INSERT INTO profile (id, body_weight_kg, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                body_weight_kg = excluded.body_weight_kg,
+                updated_at = excluded.updated_at
+            """,
+            [body_weight_kg, datetime.now().isoformat(timespec="seconds")],
+        )
     finally:
         client.close()

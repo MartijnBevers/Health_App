@@ -35,7 +35,7 @@ def log_meal(
     meal_type: str,
     fiber_g: float,
     saturated_fat_g: float,
-    sugar_g: float,
+    added_sugar_g: float,
     sodium_mg: float,
     fruit_veg_servings: float,
 ) -> str:
@@ -43,10 +43,12 @@ def log_meal(
 
     Only call this when the meal description gives you enough information
     to confidently estimate ALL of: food, calories, protein, meal type,
-    fiber, saturated fat, sugar, sodium, and fruit/vegetable servings.
+    fiber, saturated fat, added sugar, sodium, and fruit/vegetable servings.
 
     Field notes for your estimates:
-    - fiber_g, sugar_g: grams of dietary fiber and total sugar.
+    - fiber_g: grams of dietary fiber.
+    - added_sugar_g: grams of added sugar, excluding sugars naturally
+      present in fruit, milk, and other unsweetened foods.
     - saturated_fat_g: grams of saturated fat specifically (not total fat).
     - sodium_mg: milligrams of sodium.
     - fruit_veg_servings: roughly how many standard servings of fruit or
@@ -63,13 +65,13 @@ def log_meal(
         meal_type=meal_type,
         fiber_g=fiber_g,
         saturated_fat_g=saturated_fat_g,
-        sugar_g=sugar_g,
+        sugar_g=added_sugar_g,
         sodium_mg=sodium_mg,
         fruit_veg_servings=fruit_veg_servings,
     )
     return (
         f"Logged: {food} as {meal_type} -- {calories} kcal, {protein_g}g protein, "
-        f"{fiber_g}g fiber, {saturated_fat_g}g sat fat, {sugar_g}g sugar, "
+        f"{fiber_g}g fiber, {saturated_fat_g}g sat fat, {added_sugar_g}g added sugar, "
         f"{sodium_mg}mg sodium, {fruit_veg_servings} fruit/veg servings."
     )
 
@@ -99,7 +101,7 @@ SYSTEM_PROMPT = (
     "You are a nutrition-logging assistant with two tools available: "
     "log_meal and ask_clarification. "
     "Call log_meal only if you can produce a reasonably confident estimate "
-    "of calories, protein, fiber, saturated fat, sugar, sodium, "
+    "of calories, protein, fiber, saturated fat, added sugar, sodium, "
     "fruit/vegetable servings, and meal type from the description. "
     "If the description is too vague to do that responsibly, call "
     "ask_clarification instead of guessing."

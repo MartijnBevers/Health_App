@@ -24,7 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from auth import require_password
-from db import fetch_all_meals
+from db import fetch_all_meals, get_body_weight_kg, init_db, set_body_weight_kg
 
 # Must run before anything else renders -- otherwise the Dashboard page
 # would be reachable directly, bypassing the login on the main page.
@@ -33,6 +33,24 @@ require_password()
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 st.title("📊 Nutrition dashboard")
 
+
+init_db()
+
+st.subheader("Body weight")
+saved_weight = get_body_weight_kg()
+with st.form("body_weight_form"):
+    body_weight_kg = st.number_input(
+        "Current body weight (kg)",
+        min_value=20.0,
+        max_value=500.0,
+        value=saved_weight if saved_weight is not None else 70.0,
+        step=0.1,
+        help="Protein targets are calculated from this value.",
+    )
+    if st.form_submit_button("Save weight"):
+        set_body_weight_kg(body_weight_kg)
+        saved_weight = body_weight_kg
+        st.success("Body weight saved.")
 
 # ---------------------------------------------------------------------------
 # EDIT THESE to set your own healthy targets -- this is the ONLY place
@@ -45,10 +63,10 @@ st.title("📊 Nutrition dashboard")
 # ---------------------------------------------------------------------------
 HEALTHY_RANGES = {
     "calories":           {"label": "Calories (kcal)",       "min": 1800, "max": 2200},
-    "protein_g":          {"label": "Protein (g)",            "min": 50,   "max": 150},
+    "protein_g":          {"label": "Protein (g/kg)",         "min": 0.8,  "max": 2.0, "per_kg": True},
     "fiber_g":             {"label": "Fiber (g)",             "min": 25,   "max": 38},
     "saturated_fat_g":     {"label": "Saturated fat (g)",     "min": 0,    "max": 20},
-    "sugar_g":             {"label": "Sugar (g)",             "min": 0,    "max": 50},
+    "sugar_g":             {"label": "Added sugar (g)",       "min": 0,    "max": 50},
     "sodium_mg":           {"label": "Sodium (mg)",           "min": 0,    "max": 2300},
     "fruit_veg_servings":  {"label": "Fruit/veg (servings)",  "min": 5,    "max": 10},
 }
@@ -153,6 +171,13 @@ else:
     chart_rows = []
     for column_name, info in HEALTHY_RANGES.items():
         value = metric_avg_per_day[column_name]
+        # Protein is assessed relative to current body weight. Without a
+        # saved weight, omitting it avoids displaying a false personalized
+        # comparison.
+        if info.get("per_kg"):
+            if saved_weight is None:
+                continue
+            value = value / saved_weight
         healthy_max = info["max"]
         healthy_min = info["min"]
         # Normalize to % of the healthy MAX so every metric lands on a
@@ -171,6 +196,9 @@ else:
             }
         )
     chart_df = pd.DataFrame(chart_rows)
+
+    if saved_weight is None:
+        st.info("Add your body weight above to include protein in g/kg/day.")
 
     bars = alt.Chart(chart_df).mark_bar(color="#4C78A8").encode(
         x=alt.X("metric:N", title=None, sort=None, axis=alt.Axis(labelAngle=-30)),
@@ -221,4 +249,5 @@ st.dataframe(
     ].sort_values("timestamp", ascending=False),
     use_container_width=True,
     hide_index=True,
+    column_config={"sugar_g": "Added sugar (g)"},
 )
