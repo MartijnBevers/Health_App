@@ -92,9 +92,9 @@ def init_db() -> None:
 
     Safe to call every time the app starts. CREATE TABLE IF NOT EXISTS
     is a no-op if the table is already there -- and for a table that
-    already exists from before this update, _add_column_if_missing()
-    patches in the new nutrient columns without touching existing rows.
-    Old rows simply get 0 for the new fields, since we don't know their
+    already exists from before this update, we check which columns are
+    genuinely missing (via PRAGMA table_info) and only add those. Old
+    rows simply get 0 for any new fields, since we don't know their
     real values retroactively.
     """
     client = get_client()
@@ -111,9 +111,18 @@ def init_db() -> None:
             )
             """
         )
-        # Each of these is a no-op if the column already exists (see
-        # _add_column_if_missing below), so this list can just keep
-        # growing as you track more nutrients over time.
+
+        # We check which columns already exist FIRST, rather than just
+        # trying ALTER TABLE and catching the "already exists" error.
+        # Reason: libsql_client's HTTP transport has a bug where a
+        # failed ALTER TABLE raises a raw KeyError('result') instead of
+        # a readable exception, so we can't reliably detect "duplicate
+        # column" from the error message. Checking first avoids ever
+        # triggering that error path.
+        existing_columns = _get_existing_columns(client)
+
+        # Each of these gets added only if missing, so this dict can
+        # just keep growing as you track more nutrients over time.
         new_columns = {
             "fiber_g": "REAL NOT NULL DEFAULT 0",
             "saturated_fat_g": "REAL NOT NULL DEFAULT 0",
@@ -122,25 +131,24 @@ def init_db() -> None:
             "fruit_veg_servings": "REAL NOT NULL DEFAULT 0",
         }
         for column_name, column_definition in new_columns.items():
-            _add_column_if_missing(client, column_name, column_definition)
+            if column_name not in existing_columns:
+                client.execute(
+                    f"ALTER TABLE meals ADD COLUMN {column_name} {column_definition}"
+                )
     finally:
         client.close()
 
 
-def _add_column_if_missing(client: libsql_client.Client, column_name: str, column_definition: str) -> None:
-    """Add one column to the meals table, ignoring the error if it's
-    already there.
+def _get_existing_columns(client: libsql_client.Client) -> set[str]:
+    """Return the set of column names currently on the meals table.
 
-    SQLite/libSQL doesn't have a clean "ADD COLUMN IF NOT EXISTS" we can
-    rely on across versions, so instead we just try the ALTER TABLE and
-    swallow the specific "duplicate column" error if it already exists.
-    Any OTHER error (e.g. a genuine connection problem) still raises.
+    Uses SQLite's PRAGMA table_info, which returns one row per existing
+    column with fields (cid, name, type, notnull, dflt_value, pk) -- we
+    only need the 'name' field here.
     """
-    try:
-        client.execute(f"ALTER TABLE meals ADD COLUMN {column_name} {column_definition}")
-    except Exception as error:
-        if "duplicate column name" not in str(error).lower():
-            raise
+    result = client.execute("PRAGMA table_info(meals)")
+    name_index = result.columns.index("name")
+    return {row[name_index] for row in result.rows}
 
 
 def insert_meal(
