@@ -1,12 +1,25 @@
 """
 pages/1_Dashboard.py - Stats and visuals
 ============================================
+This page reads everything back out of Turso via fetch_all_meals() and
+shows:
+  1. A view switcher (Day / Week / Month / All time) with Previous/Next
+     navigation to step through periods.
+  2. ONE combined bar chart covering all seven tracked nutrients, each
+     shown as a percentage of its own healthy maximum -- with two green
+     tick marks per bar showing where the healthy range actually sits.
+     Normalizing to a percentage is what makes it possible to compare
+     e.g. sodium (thousands of mg) and fruit/veg servings (single
+     digits) on the same axis.
+  3. A full log table underneath for the raw numbers.
+
 Streamlit automatically turns any file inside a `pages/` folder into an
-extra page in the app's sidebar -- no manual routing code needed. This
-page reads everything back out of Turso via fetch_all_meals() and shows
-summary stats plus a couple of simple charts.
+extra page in the app's sidebar -- no manual routing code needed.
 """
 
+import calendar
+
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -17,8 +30,29 @@ from db import fetch_all_meals
 # would be reachable directly, bypassing the login on the main page.
 require_password()
 
-st.set_page_config(page_title="Dashboard", page_icon="📊")
+st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 st.title("📊 Nutrition dashboard")
+
+
+# ---------------------------------------------------------------------------
+# EDIT THESE to set your own healthy targets -- this is the ONLY place
+# in the app these values live, deliberately kept out of the UI.
+#
+# "min"/"max" define the healthy range shown as green tick marks on the
+# chart. The numbers below are common general dietary guideline figures
+# (not personalized to you) just so the chart works out of the box --
+# swap them for whatever targets actually make sense for your goals.
+# ---------------------------------------------------------------------------
+HEALTHY_RANGES = {
+    "calories":           {"label": "Calories (kcal)",       "min": 1800, "max": 2200},
+    "protein_g":          {"label": "Protein (g)",            "min": 50,   "max": 150},
+    "fiber_g":             {"label": "Fiber (g)",             "min": 25,   "max": 38},
+    "saturated_fat_g":     {"label": "Saturated fat (g)",     "min": 0,    "max": 20},
+    "sugar_g":             {"label": "Sugar (g)",             "min": 0,    "max": 50},
+    "sodium_mg":           {"label": "Sodium (mg)",           "min": 0,    "max": 2300},
+    "fruit_veg_servings":  {"label": "Fruit/veg (servings)",  "min": 5,    "max": 10},
+}
+
 
 meals = fetch_all_meals()
 
@@ -26,73 +60,148 @@ if not meals:
     st.info("No meals logged yet -- head to the Log Meal page to add your first one.")
     st.stop()
 
-# Turn the list of dicts into a DataFrame -- makes grouping/plotting easy.
+# Turn the list of dicts into a DataFrame -- makes grouping/filtering easy.
 df = pd.DataFrame(meals)
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df["date"] = df["timestamp"].dt.date
 
-# ---------------------------------------------------------------------------
-# Today's top-line numbers
-# ---------------------------------------------------------------------------
-today = pd.Timestamp.now().date()
-today_df = df[df["date"] == today]
-
-row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
-row1_col1.metric("Meals logged today", len(today_df))
-row1_col2.metric("Calories today", int(today_df["calories"].sum()))
-row1_col3.metric("Protein today (g)", round(today_df["protein_g"].sum(), 1))
-row1_col4.metric("Fiber today (g)", round(today_df["fiber_g"].sum(), 1))
-
-row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
-row2_col1.metric("Sat. fat today (g)", round(today_df["saturated_fat_g"].sum(), 1))
-row2_col2.metric("Sugar today (g)", round(today_df["sugar_g"].sum(), 1))
-row2_col3.metric("Sodium today (mg)", round(today_df["sodium_mg"].sum(), 0))
-row2_col4.metric("Fruit/veg servings today", round(today_df["fruit_veg_servings"].sum(), 1))
 
 # ---------------------------------------------------------------------------
-# Trends over time
+# Compute the date range for the selected view + navigation offset
 # ---------------------------------------------------------------------------
-nutrient_columns = [
-    "calories",
-    "protein_g",
-    "fiber_g",
-    "saturated_fat_g",
-    "sugar_g",
-    "sodium_mg",
-    "fruit_veg_servings",
-]
-daily = df.groupby("date")[nutrient_columns].sum().reset_index()
+def get_period_range(view: str, offset: int, all_meals_df: pd.DataFrame):
+    """Return (start_date, end_date, label) for the chosen view/offset.
 
-st.subheader("Calories per day")
-st.bar_chart(daily, x="date", y="calories")
+    offset=0 is the current day/week/month. Negative offsets step
+    backward (older periods); positive offsets step forward. "All time"
+    ignores offset entirely and always spans every logged meal.
+    """
+    today = pd.Timestamp.now().date()
 
-st.subheader("Protein per day")
-st.bar_chart(daily, x="date", y="protein_g")
+    if view == "Day":
+        day = today + pd.Timedelta(days=offset)
+        return day, day, day.strftime("%A, %d %B %Y")
 
-st.subheader("Fiber per day")
-st.bar_chart(daily, x="date", y="fiber_g")
+    if view == "Week":
+        # Monday-based week, consistent regardless of what day it is today.
+        this_monday = today - pd.Timedelta(days=today.weekday())
+        start = this_monday + pd.Timedelta(weeks=offset)
+        end = start + pd.Timedelta(days=6)
+        return start, end, f"Week of {start:%d %b} \u2013 {end:%d %b %Y}"
 
-st.subheader("Saturated fat per day")
-st.bar_chart(daily, x="date", y="saturated_fat_g")
+    if view == "Month":
+        # Add `offset` months to the current month, wrapping years correctly
+        # (e.g. January - 1 month = December of the previous year).
+        month_index = today.month - 1 + offset  # 0-based month count
+        year = today.year + month_index // 12
+        month = month_index % 12 + 1
+        start = pd.Timestamp(year=year, month=month, day=1).date()
+        last_day_num = calendar.monthrange(year, month)[1]
+        end = pd.Timestamp(year=year, month=month, day=last_day_num).date()
+        return start, end, start.strftime("%B %Y")
 
-st.subheader("Sugar per day")
-st.bar_chart(daily, x="date", y="sugar_g")
+    # "All time"
+    return all_meals_df["date"].min(), all_meals_df["date"].max(), "All time"
 
-st.subheader("Sodium per day")
-st.bar_chart(daily, x="date", y="sodium_mg")
-
-st.subheader("Fruit/vegetable servings per day")
-st.bar_chart(daily, x="date", y="fruit_veg_servings")
-
-# ---------------------------------------------------------------------------
-# Breakdown by meal type
-# ---------------------------------------------------------------------------
-st.subheader("Calories by meal type")
-by_type = df.groupby("meal_type")["calories"].sum()
-st.bar_chart(by_type)
 
 # ---------------------------------------------------------------------------
-# Full log, most recent first
+# View switcher + Previous/Next navigation
+# ---------------------------------------------------------------------------
+if "dashboard_offset" not in st.session_state:
+    st.session_state.dashboard_offset = 0
+
+view = st.radio("View", ["Day", "Week", "Month", "All time"], horizontal=True)
+
+# Reset the navigation offset whenever the view type itself changes, so
+# switching from e.g. "Week" to "Month" doesn't carry over a confusing
+# leftover offset from the other view.
+if st.session_state.get("_last_dashboard_view") != view:
+    st.session_state.dashboard_offset = 0
+    st.session_state._last_dashboard_view = view
+
+if view != "All time":
+    nav_prev, nav_label, nav_next = st.columns([1, 3, 1])
+    if nav_prev.button("\u25c0 Previous", use_container_width=True):
+        st.session_state.dashboard_offset -= 1
+    if nav_next.button("Next \u25b6", use_container_width=True):
+        st.session_state.dashboard_offset += 1
+else:
+    # No navigation for "All time" -- there's only one possible range.
+    nav_label = st.container()
+
+offset = st.session_state.dashboard_offset
+start_date, end_date, period_label = get_period_range(view, offset, df)
+nav_label.markdown(f"### {period_label}")
+
+period_df = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
+
+
+# ---------------------------------------------------------------------------
+# Combined bar chart: all seven metrics as % of their healthy maximum,
+# with green tick marks showing the healthy min/max for each one.
+# ---------------------------------------------------------------------------
+if period_df.empty:
+    st.info("No meals logged in this period.")
+else:
+    # Average per DAY YOU ACTUALLY LOGGED, not per calendar day -- so a
+    # week where you only logged 2 days isn't unfairly diluted by the
+    # 5 days you simply didn't track.
+    logged_days = period_df["date"].nunique() or 1
+    metric_totals = period_df[list(HEALTHY_RANGES.keys())].sum()
+    metric_avg_per_day = metric_totals / logged_days
+
+    chart_rows = []
+    for column_name, info in HEALTHY_RANGES.items():
+        value = metric_avg_per_day[column_name]
+        healthy_max = info["max"]
+        healthy_min = info["min"]
+        # Normalize to % of the healthy MAX so every metric lands on a
+        # comparable 0-ish-to-150-ish scale, regardless of raw units.
+        value_pct = (value / healthy_max * 100) if healthy_max else 0
+        min_pct = (healthy_min / healthy_max * 100) if healthy_max else 0
+        chart_rows.append(
+            {
+                "metric": info["label"],
+                "value": value,
+                "value_pct": value_pct,
+                "min_pct": min_pct,
+                "max_pct": 100,
+                "healthy_min": healthy_min,
+                "healthy_max": healthy_max,
+            }
+        )
+    chart_df = pd.DataFrame(chart_rows)
+
+    bars = alt.Chart(chart_df).mark_bar(color="#4C78A8").encode(
+        x=alt.X("metric:N", title=None, sort=None, axis=alt.Axis(labelAngle=-30)),
+        y=alt.Y("value_pct:Q", title="% of healthy range"),
+        tooltip=[
+            alt.Tooltip("metric:N", title="Metric"),
+            alt.Tooltip("value:Q", title="Your avg/day", format=".1f"),
+            alt.Tooltip("healthy_min:Q", title="Healthy min"),
+            alt.Tooltip("healthy_max:Q", title="Healthy max"),
+        ],
+    )
+    # Two short green ticks per bar marking the bottom and top of the
+    # healthy range -- this is what lets you see "in range" at a glance
+    # without the axis needing to be in real units.
+    min_ticks = alt.Chart(chart_df).mark_tick(color="green", thickness=3, size=40).encode(
+        x="metric:N", y="min_pct:Q"
+    )
+    max_ticks = alt.Chart(chart_df).mark_tick(color="green", thickness=3, size=40).encode(
+        x="metric:N", y="max_pct:Q"
+    )
+
+    st.altair_chart((bars + min_ticks + max_ticks).properties(height=420), use_container_width=True)
+    st.caption(
+        f"Bars show your average per day, averaged over {logged_days} day(s) you "
+        f"logged in this period. Green ticks mark the healthy min/max from "
+        f"HEALTHY_RANGES in the code."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full log, most recent first (whole history, not just the selected period)
 # ---------------------------------------------------------------------------
 st.subheader("Full log")
 st.dataframe(
