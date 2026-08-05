@@ -50,3 +50,11 @@ if st.button("Log it", type="primary") and description:
         st.warning(result_text)
     else:
         st.success(result_text)
+
+st.divider()
+
+# st.switch_page() navigates to another page in the app when clicked --
+# this is what actually changes pages, as opposed to st.page_link which
+# just renders a clickable link styled like the sidebar nav.
+if st.button("📊 View Dashboard"):
+    st.switch_page("pages/1_Dashboard.py")
