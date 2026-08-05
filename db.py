@@ -26,17 +26,42 @@ Setup:
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 import libsql_client
 from dotenv import load_dotenv
 
-# Locally this reads your .env file. On Streamlit Cloud, secrets are
-# injected as environment variables automatically, so this line is a
-# no-op there but harmless -- safe to leave in both places.
-load_dotenv()
+# Point load_dotenv() at the .env file sitting next to THIS file, rather
+# than relying on the current working directory. Without this, running
+# `streamlit run streamlit_app.py` from a different folder (or Streamlit
+# launching from its own working directory) can silently fail to find
+# .env, since load_dotenv() with no arguments only searches upward from
+# wherever the process was started, not from where db.py lives.
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
-TURSO_URL = os.environ["TURSO_DATABASE_URL"]
-TURSO_AUTH_TOKEN = os.environ["TURSO_AUTH_TOKEN"]
+
+def _require_env(key: str) -> str:
+    """Fetch an environment variable, or raise a clear, actionable error.
+
+    Plain os.environ[key] raises a bare KeyError with no context, which
+    is confusing to debug. This gives you the exact file path it looked
+    for, so a missing/misnamed .env is obvious immediately.
+    """
+    value = os.environ.get(key)
+    if not value:
+        raise RuntimeError(
+            f"Missing environment variable '{key}'. Expected it in "
+            f"{env_path} (locally) or in Streamlit Cloud's Secrets "
+            f"(when deployed). Double check the file exists, is named "
+            f"exactly '.env', and that '{key}=...' is spelled correctly "
+            f"inside it."
+        )
+    return value
+
+
+TURSO_URL = _require_env("TURSO_DATABASE_URL")
+TURSO_AUTH_TOKEN = _require_env("TURSO_AUTH_TOKEN")
 
 
 def get_client() -> libsql_client.Client:
@@ -46,18 +71,31 @@ def get_client() -> libsql_client.Client:
     long-lived connection open. Simpler to reason about, and Turso is
     built to handle many short-lived connections cheaply -- fine for a
     personal-scale app like this.
+
+    NOTE: we force the HTTPS transport instead of the WebSocket one.
+    The `libsql://` scheme makes this client connect over WebSocket
+    (wss://), which currently fails its handshake (HTTP 400) against
+    newer Turso databases created via the web dashboard. Swapping the
+    scheme to `https://` makes the same client talk plain HTTP instead,
+    which is more broadly compatible and avoids that handshake entirely.
     """
+    http_url = TURSO_URL.replace("libsql://", "https://", 1)
     return libsql_client.create_client_sync(
-        url=TURSO_URL,
+        url=http_url,
         auth_token=TURSO_AUTH_TOKEN,
     )
 
 
 def init_db() -> None:
-    """Create the `meals` table if it doesn't already exist.
+    """Create the `meals` table if it doesn't already exist, and make
+    sure it has every column this version of the app expects.
 
-    Safe to call every time the app starts -- CREATE TABLE IF NOT
-    EXISTS is a no-op if the table is already there.
+    Safe to call every time the app starts. CREATE TABLE IF NOT EXISTS
+    is a no-op if the table is already there -- and for a table that
+    already exists from before this update, _add_column_if_missing()
+    patches in the new nutrient columns without touching existing rows.
+    Old rows simply get 0 for the new fields, since we don't know their
+    real values retroactively.
     """
     client = get_client()
     try:
@@ -73,12 +111,54 @@ def init_db() -> None:
             )
             """
         )
+        # Each of these is a no-op if the column already exists (see
+        # _add_column_if_missing below), so this list can just keep
+        # growing as you track more nutrients over time.
+        new_columns = {
+            "fiber_g": "REAL NOT NULL DEFAULT 0",
+            "saturated_fat_g": "REAL NOT NULL DEFAULT 0",
+            "sugar_g": "REAL NOT NULL DEFAULT 0",
+            "sodium_mg": "REAL NOT NULL DEFAULT 0",
+            "fruit_veg_servings": "REAL NOT NULL DEFAULT 0",
+        }
+        for column_name, column_definition in new_columns.items():
+            _add_column_if_missing(client, column_name, column_definition)
     finally:
         client.close()
 
 
-def insert_meal(food: str, calories: int, protein_g: float, meal_type: str) -> None:
+def _add_column_if_missing(client: libsql_client.Client, column_name: str, column_definition: str) -> None:
+    """Add one column to the meals table, ignoring the error if it's
+    already there.
+
+    SQLite/libSQL doesn't have a clean "ADD COLUMN IF NOT EXISTS" we can
+    rely on across versions, so instead we just try the ALTER TABLE and
+    swallow the specific "duplicate column" error if it already exists.
+    Any OTHER error (e.g. a genuine connection problem) still raises.
+    """
+    try:
+        client.execute(f"ALTER TABLE meals ADD COLUMN {column_name} {column_definition}")
+    except Exception as error:
+        if "duplicate column name" not in str(error).lower():
+            raise
+
+
+def insert_meal(
+    food: str,
+    calories: int,
+    protein_g: float,
+    meal_type: str,
+    fiber_g: float = 0,
+    saturated_fat_g: float = 0,
+    sugar_g: float = 0,
+    sodium_mg: float = 0,
+    fruit_veg_servings: float = 0,
+) -> None:
     """Insert one meal row, stamped with the current time.
+
+    The five nutrient fields after meal_type default to 0 so that any
+    existing caller passing only the original four arguments keeps
+    working without changes.
 
     Uses `?` placeholders instead of string-formatting the values into
     the SQL -- this avoids SQL injection and is the correct habit even
@@ -88,8 +168,11 @@ def insert_meal(food: str, calories: int, protein_g: float, meal_type: str) -> N
     try:
         client.execute(
             """
-            INSERT INTO meals (timestamp, food, calories, protein_g, meal_type)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO meals (
+                timestamp, food, calories, protein_g, meal_type,
+                fiber_g, saturated_fat_g, sugar_g, sodium_mg, fruit_veg_servings
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 datetime.now().isoformat(timespec="seconds"),
@@ -97,6 +180,11 @@ def insert_meal(food: str, calories: int, protein_g: float, meal_type: str) -> N
                 calories,
                 protein_g,
                 meal_type,
+                fiber_g,
+                saturated_fat_g,
+                sugar_g,
+                sodium_mg,
+                fruit_veg_servings,
             ],
         )
     finally:

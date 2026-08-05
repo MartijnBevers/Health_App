@@ -37,20 +37,52 @@ df["date"] = df["timestamp"].dt.date
 today = pd.Timestamp.now().date()
 today_df = df[df["date"] == today]
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Meals logged today", len(today_df))
-col2.metric("Calories today", int(today_df["calories"].sum()))
-col3.metric("Protein today (g)", round(today_df["protein_g"].sum(), 1))
+row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
+row1_col1.metric("Meals logged today", len(today_df))
+row1_col2.metric("Calories today", int(today_df["calories"].sum()))
+row1_col3.metric("Protein today (g)", round(today_df["protein_g"].sum(), 1))
+row1_col4.metric("Fiber today (g)", round(today_df["fiber_g"].sum(), 1))
+
+row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
+row2_col1.metric("Sat. fat today (g)", round(today_df["saturated_fat_g"].sum(), 1))
+row2_col2.metric("Sugar today (g)", round(today_df["sugar_g"].sum(), 1))
+row2_col3.metric("Sodium today (mg)", round(today_df["sodium_mg"].sum(), 0))
+row2_col4.metric("Fruit/veg servings today", round(today_df["fruit_veg_servings"].sum(), 1))
 
 # ---------------------------------------------------------------------------
 # Trends over time
 # ---------------------------------------------------------------------------
+nutrient_columns = [
+    "calories",
+    "protein_g",
+    "fiber_g",
+    "saturated_fat_g",
+    "sugar_g",
+    "sodium_mg",
+    "fruit_veg_servings",
+]
+daily = df.groupby("date")[nutrient_columns].sum().reset_index()
+
 st.subheader("Calories per day")
-daily = df.groupby("date")[["calories", "protein_g"]].sum().reset_index()
 st.bar_chart(daily, x="date", y="calories")
 
 st.subheader("Protein per day")
 st.bar_chart(daily, x="date", y="protein_g")
+
+st.subheader("Fiber per day")
+st.bar_chart(daily, x="date", y="fiber_g")
+
+st.subheader("Saturated fat per day")
+st.bar_chart(daily, x="date", y="saturated_fat_g")
+
+st.subheader("Sugar per day")
+st.bar_chart(daily, x="date", y="sugar_g")
+
+st.subheader("Sodium per day")
+st.bar_chart(daily, x="date", y="sodium_mg")
+
+st.subheader("Fruit/vegetable servings per day")
+st.bar_chart(daily, x="date", y="fruit_veg_servings")
 
 # ---------------------------------------------------------------------------
 # Breakdown by meal type
@@ -64,8 +96,20 @@ st.bar_chart(by_type)
 # ---------------------------------------------------------------------------
 st.subheader("Full log")
 st.dataframe(
-    df[["timestamp", "food", "calories", "protein_g", "meal_type"]]
-    .sort_values("timestamp", ascending=False),
+    df[
+        [
+            "timestamp",
+            "food",
+            "calories",
+            "protein_g",
+            "fiber_g",
+            "saturated_fat_g",
+            "sugar_g",
+            "sodium_mg",
+            "fruit_veg_servings",
+            "meal_type",
+        ]
+    ].sort_values("timestamp", ascending=False),
     use_container_width=True,
     hide_index=True,
 )

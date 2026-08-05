@@ -28,14 +28,50 @@ from db import insert_meal
 # Tools
 # ---------------------------------------------------------------------------
 @tool
-def log_meal(food: str, calories: int, protein_g: float, meal_type: str) -> str:
+def log_meal(
+    food: str,
+    calories: int,
+    protein_g: float,
+    meal_type: str,
+    fiber_g: float,
+    saturated_fat_g: float,
+    sugar_g: float,
+    sodium_mg: float,
+    fruit_veg_servings: float,
+) -> str:
     """Log a fully-specified meal to the database.
 
     Only call this when the meal description gives you enough information
-    to confidently estimate the food, calories, protein, and meal type.
+    to confidently estimate ALL of: food, calories, protein, meal type,
+    fiber, saturated fat, sugar, sodium, and fruit/vegetable servings.
+
+    Field notes for your estimates:
+    - fiber_g, sugar_g: grams of dietary fiber and total sugar.
+    - saturated_fat_g: grams of saturated fat specifically (not total fat).
+    - sodium_mg: milligrams of sodium.
+    - fruit_veg_servings: roughly how many standard servings of fruit or
+      vegetables are in this meal (e.g. a side salad ~= 1, a plain grain
+      bowl with no produce ~= 0). Estimate to the nearest 0.5.
+
+    It's fine to estimate 0 for any of these that genuinely don't apply
+    (e.g. fruit_veg_servings=0 for a food with no fruit or vegetables).
     """
-    insert_meal(food, calories, protein_g, meal_type)
-    return f"Logged: {food} ({calories} kcal, {protein_g}g protein) as {meal_type}."
+    insert_meal(
+        food=food,
+        calories=calories,
+        protein_g=protein_g,
+        meal_type=meal_type,
+        fiber_g=fiber_g,
+        saturated_fat_g=saturated_fat_g,
+        sugar_g=sugar_g,
+        sodium_mg=sodium_mg,
+        fruit_veg_servings=fruit_veg_servings,
+    )
+    return (
+        f"Logged: {food} as {meal_type} -- {calories} kcal, {protein_g}g protein, "
+        f"{fiber_g}g fiber, {saturated_fat_g}g sat fat, {sugar_g}g sugar, "
+        f"{sodium_mg}mg sodium, {fruit_veg_servings} fruit/veg servings."
+    )
 
 
 @tool
@@ -63,7 +99,8 @@ SYSTEM_PROMPT = (
     "You are a nutrition-logging assistant with two tools available: "
     "log_meal and ask_clarification. "
     "Call log_meal only if you can produce a reasonably confident estimate "
-    "of calories, protein, food, and meal type from the description. "
+    "of calories, protein, fiber, saturated fat, sugar, sodium, "
+    "fruit/vegetable servings, and meal type from the description. "
     "If the description is too vague to do that responsibly, call "
     "ask_clarification instead of guessing."
 )
