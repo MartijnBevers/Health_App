@@ -8,4 +8,4 @@ langchain-groq>=0.2,<0.3
 libsql-client>=0.3,<0.4
 python-dotenv>=1.0,<2
 pandas>=2.2,<3
- 
+pypdf>=5,<7

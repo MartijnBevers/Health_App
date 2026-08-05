@@ -145,6 +145,19 @@ def init_db() -> None:
             )
             """
         )
+
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ah_purchase_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                purchased_on TEXT,
+                product_name TEXT NOT NULL,
+                quantity REAL NOT NULL DEFAULT 1,
+                source_file TEXT,
+                imported_at TEXT NOT NULL
+            )
+            """
+        )
     finally:
         client.close()
 
@@ -251,5 +264,43 @@ def set_body_weight_kg(body_weight_kg: float) -> None:
             """,
             [body_weight_kg, datetime.now().isoformat(timespec="seconds")],
         )
+    finally:
+        client.close()
+
+
+def insert_ah_purchase_items(
+    items: list[dict], source_file: str | None = None
+) -> None:
+    """Save reviewed Albert Heijn purchase items without treating them as meals."""
+    client = get_client()
+    try:
+        now = datetime.now().isoformat(timespec="seconds")
+        for item in items:
+            client.execute(
+                """
+                INSERT INTO ah_purchase_items
+                    (purchased_on, product_name, quantity, source_file, imported_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    item.get("purchased_on") or None,
+                    item["product_name"],
+                    item.get("quantity", 1),
+                    source_file,
+                    now,
+                ],
+            )
+    finally:
+        client.close()
+
+
+def fetch_ah_purchase_items() -> list[dict]:
+    """Return imported purchase history, newest first."""
+    client = get_client()
+    try:
+        result = client.execute(
+            "SELECT * FROM ah_purchase_items ORDER BY imported_at DESC, id DESC"
+        )
+        return [dict(zip(result.columns, row)) for row in result.rows]
     finally:
         client.close()
