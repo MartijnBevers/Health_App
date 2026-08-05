@@ -15,7 +15,12 @@ just a webpage with a public URL.
 import streamlit as st
 
 from agent import log_meal_from_text
+from auth import require_password
 from db import init_db
+
+# Must run before anything else renders -- stops the page here if the
+# user hasn't entered the correct password yet this session.
+require_password()
 
 # Make sure the meals table exists before anything tries to write to it.
 # Cheap to call on every page load -- it's a no-op after the first time.

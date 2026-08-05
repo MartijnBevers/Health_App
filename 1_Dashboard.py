@@ -10,7 +10,12 @@ summary stats plus a couple of simple charts.
 import pandas as pd
 import streamlit as st
 
+from auth import require_password
 from db import fetch_all_meals
+
+# Must run before anything else renders -- otherwise the Dashboard page
+# would be reachable directly, bypassing the login on the main page.
+require_password()
 
 st.set_page_config(page_title="Dashboard", page_icon="📊")
 st.title("📊 Nutrition dashboard")
