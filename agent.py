@@ -1,16 +1,11 @@
 """
 agent.py - The LangGraph tool-calling agent
 ==============================================
-This is the same agent from 03/04_*.py -- same two tools, same
-branching logic, same graph shape. The only change is that log_meal
-now calls insert_meal() from db.py instead of talking to sqlite3
-directly. The agent itself doesn't know or care whether that write
-ends up in a local file or a hosted Turso database -- that's the whole
-benefit of keeping storage behind its own module.
-
-log_meal_from_text() is new: a small wrapper that takes a plain string
-and returns the final conversation, so the Streamlit page doesn't need
-to know anything about LangChain message objects or graph state.
+This agent now has THREE tools instead of two: log_meal, log_exercise,
+and ask_clarification. The model picks whichever fits your message --
+you don't need a separate box for exercise vs. food, it reads the
+description and decides. Each ToolMessage is tagged with `name=` so the
+UI (streamlit_app.py) can tell which tool fired without parsing text.
 """
 
 from typing import Annotated, TypedDict
@@ -21,7 +16,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
-from db import insert_meal
+from db import insert_meal, insert_exercise
 
 
 # ---------------------------------------------------------------------------
@@ -41,9 +36,10 @@ def log_meal(
 ) -> str:
     """Log a fully-specified meal to the database.
 
-    Only call this when the meal description gives you enough information
-    to confidently estimate ALL of: food, calories, protein, meal type,
-    fiber, saturated fat, added sugar, sodium, and fruit/vegetable servings.
+    Only call this when the message describes FOOD, and gives you enough
+    information to confidently estimate ALL of: food, calories, protein,
+    meal type, fiber, saturated fat, added sugar, sodium, and fruit/
+    vegetable servings.
 
     Field notes for your estimates:
     - fiber_g: grams of dietary fiber.
@@ -55,8 +51,7 @@ def log_meal(
       vegetables are in this meal (e.g. a side salad ~= 1, a plain grain
       bowl with no produce ~= 0). Estimate to the nearest 0.5.
 
-    It's fine to estimate 0 for any of these that genuinely don't apply
-    (e.g. fruit_veg_servings=0 for a food with no fruit or vegetables).
+    It's fine to estimate 0 for any of these that genuinely don't apply.
     """
     insert_meal(
         food=food,
@@ -77,17 +72,53 @@ def log_meal(
 
 
 @tool
-def ask_clarification(question: str) -> str:
-    """Ask the user a clarifying question instead of logging a meal.
+def log_exercise(
+    activity_type: str,
+    duration_min: float,
+    calories_burned: int,
+    intensity: str,
+) -> str:
+    """Log a workout/exercise session to the database.
 
-    Call this when the meal description is too vague to confidently
-    estimate nutrition info -- e.g. missing what the food actually is,
-    or giving no usable detail at all (like "I ate something earlier").
+    Only call this when the message describes PHYSICAL EXERCISE (e.g.
+    "ran 5k in 30 minutes", "did an hour of weightlifting", "30 min
+    yoga session"), and you can confidently estimate calories burned
+    and intensity from the activity type and duration.
+
+    Field notes for your estimates:
+    - activity_type: a short label, e.g. "running", "strength_training",
+      "cycling", "yoga", "swimming".
+    - calories_burned: estimate using typical calorie-burn rates for an
+      average adult doing that activity at that duration/intensity.
+    - intensity: one of "low", "moderate", or "high", based on how
+      strenuous the activity typically is (e.g. a light walk = low,
+      an easy jog = moderate, HIIT or hard running = high).
+    """
+    insert_exercise(
+        source="chat",
+        activity_type=activity_type,
+        duration_min=duration_min,
+        calories_burned=calories_burned,
+        intensity=intensity,
+    )
+    return (
+        f"Logged: {activity_type} for {duration_min} min ({intensity} intensity) "
+        f"-- ~{calories_burned} kcal burned."
+    )
+
+
+@tool
+def ask_clarification(question: str) -> str:
+    """Ask the user a clarifying question instead of logging anything.
+
+    Call this when the message is too vague to confidently log as either
+    a meal or exercise -- e.g. missing what the food/activity actually
+    was, or giving no usable detail at all (like "I did something earlier").
     """
     return f"[Clarification needed]: {question}"
 
 
-tools = [log_meal, ask_clarification]
+tools = [log_meal, log_exercise, ask_clarification]
 tools_by_name = {t.name: t for t in tools}
 
 
@@ -98,12 +129,13 @@ llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
 llm_with_tools = llm.bind_tools(tools)
 
 SYSTEM_PROMPT = (
-    "You are a nutrition-logging assistant with two tools available: "
-    "log_meal and ask_clarification. "
-    "Call log_meal only if you can produce a reasonably confident estimate "
-    "of calories, protein, fiber, saturated fat, added sugar, sodium, "
-    "fruit/vegetable servings, and meal type from the description. "
-    "If the description is too vague to do that responsibly, call "
+    "You are a personal health-logging assistant with three tools available: "
+    "log_meal, log_exercise, and ask_clarification. "
+    "If the message describes food that was eaten, call log_meal with "
+    "confident nutrition estimates. If the message describes physical "
+    "exercise or a workout, call log_exercise with confident estimates of "
+    "calories burned and intensity based on the activity and duration. "
+    "If the message is too vague to confidently do either, call "
     "ask_clarification instead of guessing."
 )
 
@@ -125,12 +157,21 @@ def call_model(state: AgentState) -> dict:
 
 
 def execute_tool(state: AgentState) -> dict:
-    """Run whichever tool the model chose and append the result."""
+    """Run whichever tool the model chose and append the result.
+
+    The ToolMessage is tagged with name=tool_call["name"] -- this is what
+    lets streamlit_app.py tell whether a meal, an exercise, or a
+    clarification question was produced, without parsing the text.
+    """
     last_message = state["messages"][-1]
     tool_call = last_message.tool_calls[0]
     selected_tool = tools_by_name[tool_call["name"]]
     result = selected_tool.invoke(tool_call["args"])
-    tool_message = ToolMessage(content=result, tool_call_id=tool_call["id"])
+    tool_message = ToolMessage(
+        content=result,
+        tool_call_id=tool_call["id"],
+        name=tool_call["name"],
+    )
     return {"messages": [tool_message]}
 
 
@@ -146,15 +187,21 @@ def route_after_model(state: AgentState) -> str:
 graph_builder = StateGraph(AgentState)
 graph_builder.add_node("call_model", call_model)
 graph_builder.add_node("log_meal", execute_tool)
+graph_builder.add_node("log_exercise", execute_tool)
 graph_builder.add_node("ask_clarification", execute_tool)
 
 graph_builder.add_edge(START, "call_model")
 graph_builder.add_conditional_edges(
     "call_model",
     route_after_model,
-    {"log_meal": "log_meal", "ask_clarification": "ask_clarification"},
+    {
+        "log_meal": "log_meal",
+        "log_exercise": "log_exercise",
+        "ask_clarification": "ask_clarification",
+    },
 )
 graph_builder.add_edge("log_meal", END)
+graph_builder.add_edge("log_exercise", END)
 graph_builder.add_edge("ask_clarification", END)
 
 app = graph_builder.compile()
@@ -163,18 +210,17 @@ app = graph_builder.compile()
 # ---------------------------------------------------------------------------
 # Convenience wrapper for the UI
 # ---------------------------------------------------------------------------
-def log_meal_from_text(description: str) -> list:
-    """Run the agent on one free-text meal description.
+def run_agent(description: str) -> list:
+    """Run the agent on one free-text message describing food OR exercise.
 
     Returns the final list of conversation messages so the caller (e.g.
-    a Streamlit page) can display the agent's response -- either a log
-    confirmation or a clarifying question -- without needing to know
-    anything about LangGraph internals.
+    a Streamlit page) can display the agent's response -- a meal log, an
+    exercise log, or a clarifying question -- by checking messages[-1].name.
     """
     initial_state: AgentState = {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Log this meal: {description}"),
+            HumanMessage(content=description),
         ]
     }
     final_state = app.invoke(initial_state)

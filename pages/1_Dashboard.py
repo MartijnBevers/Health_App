@@ -17,14 +17,13 @@ Streamlit automatically turns any file inside a `pages/` folder into an
 extra page in the app's sidebar -- no manual routing code needed.
 """
 
-import calendar
-
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from auth import require_password
 from db import fetch_all_meals, get_body_weight_kg, init_db, set_body_weight_kg
+from period_utils import get_period_range
 
 # Must run before anything else renders -- otherwise the Dashboard page
 # would be reachable directly, bypassing the login on the main page.
@@ -82,44 +81,6 @@ if not meals:
 df = pd.DataFrame(meals)
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df["date"] = df["timestamp"].dt.date
-
-
-# ---------------------------------------------------------------------------
-# Compute the date range for the selected view + navigation offset
-# ---------------------------------------------------------------------------
-def get_period_range(view: str, offset: int, all_meals_df: pd.DataFrame):
-    """Return (start_date, end_date, label) for the chosen view/offset.
-
-    offset=0 is the current day/week/month. Negative offsets step
-    backward (older periods); positive offsets step forward. "All time"
-    ignores offset entirely and always spans every logged meal.
-    """
-    today = pd.Timestamp.now().date()
-
-    if view == "Day":
-        day = today + pd.Timedelta(days=offset)
-        return day, day, day.strftime("%A, %d %B %Y")
-
-    if view == "Week":
-        # Monday-based week, consistent regardless of what day it is today.
-        this_monday = today - pd.Timedelta(days=today.weekday())
-        start = this_monday + pd.Timedelta(weeks=offset)
-        end = start + pd.Timedelta(days=6)
-        return start, end, f"Week of {start:%d %b} \u2013 {end:%d %b %Y}"
-
-    if view == "Month":
-        # Add `offset` months to the current month, wrapping years correctly
-        # (e.g. January - 1 month = December of the previous year).
-        month_index = today.month - 1 + offset  # 0-based month count
-        year = today.year + month_index // 12
-        month = month_index % 12 + 1
-        start = pd.Timestamp(year=year, month=month, day=1).date()
-        last_day_num = calendar.monthrange(year, month)[1]
-        end = pd.Timestamp(year=year, month=month, day=last_day_num).date()
-        return start, end, start.strftime("%B %Y")
-
-    # "All time"
-    return all_meals_df["date"].min(), all_meals_df["date"].max(), "All time"
 
 
 # ---------------------------------------------------------------------------

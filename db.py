@@ -145,6 +145,41 @@ def init_db() -> None:
             )
             """
         )
+
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exercises (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp           TEXT NOT NULL,   -- when the workout happened
+                source              TEXT NOT NULL,   -- 'chat' or 'garmin'
+                activity_type       TEXT NOT NULL,   -- e.g. 'running', 'strength_training'
+                duration_min        REAL NOT NULL,
+                calories_burned     INTEGER NOT NULL,
+                intensity           TEXT NOT NULL,   -- 'low' | 'moderate' | 'high'
+                garmin_activity_id  TEXT              -- NULL for chat-logged entries
+            )
+            """
+        )
+        # Partial unique index: only enforces uniqueness where an activity
+        # actually came from Garmin. This is what lets us re-run the Garmin
+        # sync every day without ever creating duplicate rows for the same
+        # workout -- INSERT OR IGNORE below will silently skip a repeat.
+        client.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_garmin_id
+            ON exercises(garmin_activity_id)
+            WHERE garmin_activity_id IS NOT NULL
+            """
+        )
+
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_garmin_sync TEXT
+            )
+            """
+        )
     finally:
         client.close()
 
@@ -250,6 +285,91 @@ def set_body_weight_kg(body_weight_kg: float) -> None:
                 updated_at = excluded.updated_at
             """,
             [body_weight_kg, datetime.now().isoformat(timespec="seconds")],
+        )
+    finally:
+        client.close()
+
+def insert_exercise(
+    source: str,
+    activity_type: str,
+    duration_min: float,
+    calories_burned: int,
+    intensity: str,
+    garmin_activity_id: str | None = None,
+    timestamp: str | None = None,
+) -> bool:
+    """Insert one exercise row. Returns True if a new row was actually
+    inserted, False if it was skipped as a duplicate.
+
+    Chat-logged workouts (garmin_activity_id=None) always insert -- the
+    partial unique index only applies where garmin_activity_id IS NOT NULL,
+    so multiple NULLs are fine. Garmin-imported workouts use INSERT OR
+    IGNORE, so re-syncing the same days is always safe to repeat.
+
+    timestamp defaults to "now" for chat-logged entries; Garmin imports
+    pass the workout's real start time instead.
+    """
+    client = get_client()
+    try:
+        result = client.execute(
+            """
+            INSERT OR IGNORE INTO exercises (
+                timestamp, source, activity_type, duration_min,
+                calories_burned, intensity, garmin_activity_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                timestamp or datetime.now().isoformat(timespec="seconds"),
+                source,
+                activity_type,
+                duration_min,
+                calories_burned,
+                intensity,
+                garmin_activity_id,
+            ],
+        )
+        return result.rows_affected > 0
+    finally:
+        client.close()
+
+
+def fetch_all_exercises() -> list[dict]:
+    """Return every logged exercise, most recent first, as a list of dicts."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT * FROM exercises ORDER BY id DESC")
+        columns = result.columns
+        return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def get_last_garmin_sync() -> str | None:
+    """Return the ISO timestamp of the last successful Garmin sync, or
+    None if a sync has never run."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT last_garmin_sync FROM sync_state WHERE id = 1")
+        if not result.rows:
+            return None
+        return result.rows[0][0]
+    finally:
+        client.close()
+
+
+def set_last_garmin_sync(timestamp: str) -> None:
+    """Record that a Garmin sync just ran, so sync_if_stale() knows not
+    to run again for another 24h."""
+    client = get_client()
+    try:
+        client.execute(
+            """
+            INSERT INTO sync_state (id, last_garmin_sync)
+            VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET last_garmin_sync = excluded.last_garmin_sync
+            """,
+            [timestamp],
         )
     finally:
         client.close()

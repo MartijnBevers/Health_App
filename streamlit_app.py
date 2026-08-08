@@ -14,9 +14,9 @@ just a webpage with a public URL.
 
 import streamlit as st
 
-from agent import log_meal_from_text
 from auth import require_password
 from db import init_db
+from agent import run_agent
 
 # Must run before anything else renders -- stops the page here if the
 # user hasn't entered the correct password yet this session.
@@ -26,35 +26,32 @@ require_password()
 # Cheap to call on every page load -- it's a no-op after the first time.
 init_db()
 
-st.set_page_config(page_title="Log a meal", page_icon="🍽️")
-st.title("🍽️ Log a meal")
+st.set_page_config(page_title="Log meal or exercise", page_icon="📝")
+st.title("📝 Log a meal or a workout")
 st.caption(
-    "Describe what you ate in plain language. The agent will log it, "
-    "or ask a follow-up question if it needs more detail."
+    "Describe what you ate or the exercise you did, in plain language. "
+    "The agent will log it, or ask a follow-up question if it needs more detail."
 )
 
 description = st.text_input(
-    "What did you eat?",
-    placeholder="e.g. a bowl of oatmeal with banana and peanut butter",
+    "What did you eat or do?",
+    placeholder="e.g. a bowl of oatmeal with banana -- or -- ran 5k in 28 minutes",
 )
 
 if st.button("Log it", type="primary") and description:
     with st.spinner("Thinking..."):
-        messages = log_meal_from_text(description)
+        messages = run_agent(description)
 
-    # The last message in the conversation is the tool's result --
-    # either a log confirmation from log_meal, or a question from
-    # ask_clarification. We show it differently depending on which.
-    result_text = messages[-1].content
-    if "Clarification needed" in result_text:
-        st.warning(result_text)
+    result_message = messages[-1]
+    if result_message.name == "ask_clarification":
+        st.warning(result_message.content)
     else:
-        st.success(result_text)
+        st.success(result_message.content)
 
 st.divider()
 
-# st.switch_page() navigates to another page in the app when clicked --
-# this is what actually changes pages, as opposed to st.page_link which
-# just renders a clickable link styled like the sidebar nav.
-if st.button("📊 View Dashboard"):
+col1, col2 = st.columns(2)
+if col1.button("📊 View Nutrition Dashboard"):
     st.switch_page("pages/1_Dashboard.py")
+if col2.button("🏃 View Exercise Dashboard"):
+    st.switch_page("pages/2_Exercise.py")
