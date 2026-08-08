@@ -52,7 +52,7 @@ def _estimate_intensity(calories: float, duration_min: float) -> str:
     return "high"
 
 
-def sync_garmin_activities(days_back: int = 3) -> int:
+def sync_garmin_activities(days_back: int = 21) -> int:
     """Fetch recent activities from Garmin Connect and insert any new ones.
 
     Looks back `days_back` days (default 3) rather than just "today", so
