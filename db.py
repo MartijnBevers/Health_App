@@ -180,6 +180,46 @@ def init_db() -> None:
             )
             """
         )
+
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exercise_catalog (
+                name     TEXT PRIMARY KEY,
+                category TEXT NOT NULL
+            )
+            """
+        )
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS strength_sets (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp  TEXT NOT NULL,   -- when the set was logged
+                date       TEXT NOT NULL,   -- session date (YYYY-MM-DD), for grouping sets into a workout
+                exercise   TEXT NOT NULL,
+                category   TEXT,
+                weight_kg  REAL,
+                reps       INTEGER,
+                notes      TEXT
+            )
+            """
+        )
+
+        # Seed a small default catalog on first run -- INSERT OR IGNORE
+        # makes this a no-op on every call after the first.
+        default_exercises = [
+            ("Bench Press", "Chest"), ("Incline Dumbbell Press", "Chest"), ("Push Up", "Chest"),
+            ("Deadlift", "Back"), ("Pull Up", "Back"), ("Barbell Row", "Back"), ("Lat Pulldown", "Back"),
+            ("Squat", "Legs"), ("Leg Press", "Legs"), ("Romanian Deadlift", "Legs"),
+            ("Overhead Press", "Shoulders"), ("Lateral Raise", "Shoulders"),
+            ("Bicep Curl", "Arms"), ("Tricep Pushdown", "Arms"),
+            ("Plank", "Core"),
+        ]
+        for name, category in default_exercises:
+            client.execute(
+                "INSERT OR IGNORE INTO exercise_catalog (name, category) VALUES (?, ?)",
+                [name, category],
+            )
+
     finally:
         client.close()
 
@@ -371,5 +411,69 @@ def set_last_garmin_sync(timestamp: str) -> None:
             """,
             [timestamp],
         )
+    finally:
+        client.close()
+
+def fetch_exercise_catalog() -> list[dict]:
+    """Return every exercise in the catalog (name + category), A-Z."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT name, category FROM exercise_catalog ORDER BY name")
+        columns = result.columns
+        return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def add_exercise_to_catalog(name: str, category: str) -> None:
+    """Add a new exercise so it shows up in the picker next time."""
+    client = get_client()
+    try:
+        client.execute(
+            "INSERT OR IGNORE INTO exercise_catalog (name, category) VALUES (?, ?)",
+            [name, category],
+        )
+    finally:
+        client.close()
+
+
+def insert_strength_set(
+    date: str, exercise: str, category: str, weight_kg: float, reps: int, notes: str = ""
+) -> None:
+    """Log one set -- one row per set, same model FitNotes uses.
+    `date` is the workout day (YYYY-MM-DD); `timestamp` is "now"."""
+    client = get_client()
+    try:
+        client.execute(
+            """
+            INSERT INTO strength_sets (timestamp, date, exercise, category, weight_kg, reps, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [datetime.now().isoformat(timespec="seconds"), date, exercise, category, weight_kg, reps, notes],
+        )
+    finally:
+        client.close()
+
+
+def fetch_strength_sets(date: str | None = None) -> list[dict]:
+    """Return logged sets, most recent first. Pass `date` (YYYY-MM-DD)
+    to filter to one day; omit it to get the full history."""
+    client = get_client()
+    try:
+        if date:
+            result = client.execute("SELECT * FROM strength_sets WHERE date = ? ORDER BY id DESC", [date])
+        else:
+            result = client.execute("SELECT * FROM strength_sets ORDER BY id DESC")
+        columns = result.columns
+        return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def delete_strength_set(set_id: int) -> None:
+    """Delete one logged set by id -- for fixing a mis-entered weight/reps."""
+    client = get_client()
+    try:
+        client.execute("DELETE FROM strength_sets WHERE id = ?", [set_id])
     finally:
         client.close()
