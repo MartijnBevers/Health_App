@@ -24,6 +24,8 @@ import streamlit as st
 from auth import require_password
 from db import fetch_all_meals, get_body_weight_kg, init_db, set_body_weight_kg
 from period_utils import get_period_range
+from health_ranges import HEALTHY_RANGES
+
 
 # Must run before anything else renders -- otherwise the Dashboard page
 # would be reachable directly, bypassing the login on the main page.
@@ -50,25 +52,6 @@ with st.form("body_weight_form"):
         set_body_weight_kg(body_weight_kg)
         saved_weight = body_weight_kg
         st.success("Body weight saved.")
-
-# ---------------------------------------------------------------------------
-# EDIT THESE to set your own healthy targets -- this is the ONLY place
-# in the app these values live, deliberately kept out of the UI.
-#
-# "min"/"max" define the healthy range shown as green tick marks on the
-# chart. The numbers below are common general dietary guideline figures
-# (not personalized to you) just so the chart works out of the box --
-# swap them for whatever targets actually make sense for your goals.
-# ---------------------------------------------------------------------------
-HEALTHY_RANGES = {
-    "calories":           {"label": "Calories (kcal)",       "min": 1800, "max": 2200},
-    "protein_g":          {"label": "Protein (g/kg)",         "min": 0.8,  "max": 2.0, "per_kg": True},
-    "fiber_g":             {"label": "Fiber (g)",             "min": 25,   "max": 38},
-    "saturated_fat_g":     {"label": "Saturated fat (g)",     "min": 0,    "max": 20},
-    "sugar_g":             {"label": "Added sugar (g)",       "min": 0,    "max": 50},
-    "sodium_mg":           {"label": "Sodium (mg)",           "min": 0,    "max": 2300},
-    "fruit_veg_servings":  {"label": "Fruit/veg (servings)",  "min": 5,    "max": 10},
-}
 
 
 meals = fetch_all_meals()
