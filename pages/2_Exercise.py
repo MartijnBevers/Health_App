@@ -51,7 +51,7 @@ strength_rows = fetch_strength_sets()
 
 df = pd.DataFrame(exercises)
 if not df.empty:
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed")
     df["date"] = df["timestamp"].dt.date
 
 strength_df_all = pd.DataFrame(strength_rows)
