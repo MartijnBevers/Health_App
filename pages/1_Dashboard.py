@@ -22,7 +22,14 @@ import pandas as pd
 import streamlit as st
 
 from auth import require_password
-from db import fetch_all_meals, get_body_weight_kg, init_db, set_body_weight_kg
+from db import (
+    fetch_all_meals,
+    fetch_body_weight_log,
+    fetch_sleep_log,
+    get_latest_body_weight_kg,
+    get_profile_info,
+    init_db,
+)
 from period_utils import get_period_range
 from health_ranges import HEALTHY_RANGES
 
@@ -37,22 +44,66 @@ st.title("📊 Nutrition dashboard")
 
 init_db()
 
-st.subheader("Body weight")
-saved_weight = get_body_weight_kg()
-with st.form("body_weight_form"):
-    body_weight_kg = st.number_input(
-        "Current body weight (kg)",
-        min_value=20.0,
-        max_value=500.0,
-        value=saved_weight if saved_weight is not None else 70.0,
-        step=0.1,
-        help="Protein targets are calculated from this value.",
-    )
-    if st.form_submit_button("Save weight"):
-        set_body_weight_kg(body_weight_kg)
-        saved_weight = body_weight_kg
-        st.success("Body weight saved.")
+st.subheader("Profile")
+profile_info = get_profile_info()
+saved_weight = get_latest_body_weight_kg()
 
+col1, col2, col3 = st.columns(3)
+col1.metric("Age", profile_info["age"] if profile_info["age"] is not None else "Not set")
+col2.metric(
+    "Height",
+    f"{profile_info['height_cm']:.0f} cm" if profile_info["height_cm"] is not None else "Not set",
+)
+col3.metric(
+    "Weight",
+    f"{saved_weight:.1f} kg" if saved_weight is not None else "Not set",
+)
+st.caption(
+    "Age, height, and weight are entered through the chat on the Log Meal "
+    "page — e.g. tell the agent \"I'm 23, 181cm, and weigh 78kg\"."
+)
+
+st.subheader("Weight progress")
+weight_log = fetch_body_weight_log()
+if weight_log:
+    weight_df = pd.DataFrame(weight_log)
+    weight_df["timestamp"] = pd.to_datetime(weight_df["timestamp"])
+    weight_chart = (
+        alt.Chart(weight_df)
+        .mark_line(point=True, color="#E45756")
+        .encode(
+            x=alt.X("timestamp:T", title="Date"),
+            y=alt.Y("weight_kg:Q", title="Weight (kg)", scale=alt.Scale(zero=False)),
+            tooltip=[
+                alt.Tooltip("timestamp:T", title="Date"),
+                alt.Tooltip("weight_kg:Q", title="Weight (kg)", format=".1f"),
+            ],
+        )
+    )
+    st.altair_chart(weight_chart.properties(height=250), use_container_width=True)
+else:
+    st.info("No weight logged yet — tell the agent your weight in chat to start tracking.")
+
+st.subheader("Sleep progress")
+sleep_log = fetch_sleep_log()
+if sleep_log:
+    sleep_df = pd.DataFrame(sleep_log)
+    sleep_df["timestamp"] = pd.to_datetime(sleep_df["timestamp"])
+    sleep_chart = (
+        alt.Chart(sleep_df)
+        .mark_bar(color="#72B7B2")
+        .encode(
+            x=alt.X("timestamp:T", title="Date"),
+            y=alt.Y("hours:Q", title="Hours slept"),
+            tooltip=[
+                alt.Tooltip("timestamp:T", title="Date"),
+                alt.Tooltip("hours:Q", title="Hours"),
+            ],
+        )
+    )
+    st.altair_chart(sleep_chart.properties(height=250), use_container_width=True)
+else:
+    st.info("No sleep logged yet — tell the agent your sleep hours in chat to start tracking.")
 
 meals = fetch_all_meals()
 

@@ -15,9 +15,14 @@ from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from typing import Optional
 
-from db import insert_meal, insert_exercise
-
+from db import (
+    insert_meal,
+    log_body_weight,
+    log_sleep,
+    set_profile_info,
+)
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -117,8 +122,51 @@ def ask_clarification(question: str) -> str:
     """
     return f"[Clarification needed]: {question}"
 
+@tool
+def log_body_weight_tool(weight_kg: float) -> str:
+    """Log the user's current body weight in kilograms.
 
-tools = [log_meal, log_exercise, ask_clarification]
+    Call this whenever the user reports their weight, e.g. "I weigh 82kg
+    today" or "log my weight as 81.5". Each call adds a new dated entry
+    so weight can be tracked as a trend over time -- it never overwrites
+    a previous entry.
+    """
+    log_body_weight(weight_kg)
+    return f"Logged body weight: {weight_kg} kg."
+
+
+@tool
+def log_sleep_tool(hours: float) -> str:
+    """Log how many hours the user slept.
+
+    Call this whenever the user reports sleep, e.g. "I slept 7.5 hours"
+    or "got 6 hours last night". Each call adds a new dated entry so
+    sleep can be tracked as a trend over time.
+    """
+    log_sleep(hours)
+    return f"Logged sleep: {hours} hours."
+
+
+@tool
+def update_profile(age: Optional[int] = None, height_cm: Optional[float] = None) -> str:
+    """Update the user's age and/or height.
+
+    Call this when the user states their age or height, e.g. "I'm 23
+    years old" or "I'm 181cm tall". Pass only the field(s) the user
+    actually mentioned and leave the other as None -- age and height
+    don't need history, just the current value, so this overwrites
+    rather than appending.
+    """
+    set_profile_info(age=age, height_cm=height_cm)
+    changes = []
+    if age is not None:
+        changes.append(f"age = {age}")
+    if height_cm is not None:
+        changes.append(f"height = {height_cm} cm")
+    return f"Updated profile: {', '.join(changes) if changes else 'nothing provided'}."
+
+
+tools = [log_meal, ask_clarification, log_body_weight_tool, log_sleep_tool, update_profile]
 tools_by_name = {t.name: t for t in tools}
 
 
@@ -129,13 +177,16 @@ llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
 llm_with_tools = llm.bind_tools(tools)
 
 SYSTEM_PROMPT = (
-    "You are a personal health-logging assistant with three tools available: "
-    "log_meal, log_exercise, and ask_clarification. "
-    "If the message describes food that was eaten, call log_meal with "
-    "confident nutrition estimates. If the message describes physical "
-    "exercise or a workout, call log_exercise with confident estimates of "
-    "calories burned and intensity based on the activity and duration. "
-    "If the message is too vague to confidently do either, call "
+    "You are a personal health-tracking assistant with these tools: "
+    "log_meal, ask_clarification, log_body_weight_tool, log_sleep_tool, "
+    "and update_profile. "
+    "Call log_meal only if you can produce a reasonably confident estimate "
+    "of calories, protein, fiber, saturated fat, added sugar, sodium, "
+    "fruit/vegetable servings, and meal type from the description. "
+    "Call log_body_weight_tool whenever the user reports their weight, "
+    "log_sleep_tool whenever they report hours slept, and update_profile "
+    "whenever they state their age or height. "
+    "If a message is too vague to act on responsibly, call "
     "ask_clarification instead of guessing."
 )
 
@@ -189,6 +240,9 @@ graph_builder.add_node("call_model", call_model)
 graph_builder.add_node("log_meal", execute_tool)
 graph_builder.add_node("log_exercise", execute_tool)
 graph_builder.add_node("ask_clarification", execute_tool)
+graph_builder.add_node("log_body_weight_tool", execute_tool)
+graph_builder.add_node("log_sleep_tool", execute_tool)
+graph_builder.add_node("update_profile", execute_tool)
 
 graph_builder.add_edge(START, "call_model")
 graph_builder.add_conditional_edges(
@@ -196,13 +250,18 @@ graph_builder.add_conditional_edges(
     route_after_model,
     {
         "log_meal": "log_meal",
-        "log_exercise": "log_exercise",
         "ask_clarification": "ask_clarification",
+        "log_body_weight_tool": "log_body_weight_tool",
+        "log_sleep_tool": "log_sleep_tool",
+        "update_profile": "update_profile",
     },
 )
 graph_builder.add_edge("log_meal", END)
 graph_builder.add_edge("log_exercise", END)
 graph_builder.add_edge("ask_clarification", END)
+graph_builder.add_edge("log_body_weight_tool", END)
+graph_builder.add_edge("log_sleep_tool", END)
+graph_builder.add_edge("update_profile", END)
 
 app = graph_builder.compile()
 

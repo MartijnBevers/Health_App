@@ -119,7 +119,7 @@ def init_db() -> None:
         # a readable exception, so we can't reliably detect "duplicate
         # column" from the error message. Checking first avoids ever
         # triggering that error path.
-        existing_columns = _get_existing_columns(client)
+        existing_columns = _get_existing_columns(client, "meals")
 
         # Each of these gets added only if missing, so this dict can
         # just keep growing as you track more nutrients over time.
@@ -136,6 +136,10 @@ def init_db() -> None:
                     f"ALTER TABLE meals ADD COLUMN {column_name} {column_definition}"
                 )
 
+        # profile: age and height DON'T need history -- just the current
+        # value -- so they live as columns on this single-row table, same
+        # pattern as the old body_weight_kg used to (before weight got its
+        # own log table below, since weight DOES need history).
         client.execute(
             """
             CREATE TABLE IF NOT EXISTS profile (
@@ -145,6 +149,39 @@ def init_db() -> None:
             )
             """
         )
+        profile_columns = _get_existing_columns(client, "profile")
+        new_profile_columns = {
+            "age": "INTEGER",
+            "height_cm": "REAL",
+        }
+        for column_name, column_definition in new_profile_columns.items():
+            if column_name not in profile_columns:
+                client.execute(
+                    f"ALTER TABLE profile ADD COLUMN {column_name} {column_definition}"
+                )
+
+        # Weight and sleep both need progress-over-time, so each gets its
+        # own append-only log table (one row per entry logged), rather than
+        # a single overwritable value.
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS body_weight_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                weight_kg REAL NOT NULL
+            )
+            """
+        )
+        client.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sleep_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                hours     REAL NOT NULL
+            )
+            """
+        )
+            
 
         client.execute(
             """
@@ -300,11 +337,45 @@ def fetch_all_meals() -> list[dict]:
         client.close()
 
 
-def get_body_weight_kg() -> float | None:
-    """Return the saved current body weight, if one has been entered."""
+def log_body_weight(weight_kg: float) -> None:
+    """Append a new body-weight entry, stamped with the current time.
+
+    We INSERT a new row rather than overwriting a single value -- that's
+    what lets the dashboard plot weight as a trend over time instead of
+    only ever showing "today's" number.
+    """
     client = get_client()
     try:
-        result = client.execute("SELECT body_weight_kg FROM profile WHERE id = 1")
+        client.execute(
+            "INSERT INTO body_weight_log (timestamp, weight_kg) VALUES (?, ?)",
+            [datetime.now().isoformat(timespec="seconds"), weight_kg],
+        )
+    finally:
+        client.close()
+
+
+def fetch_body_weight_log() -> list[dict]:
+    """Return every logged body-weight entry, most recent first."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT * FROM body_weight_log ORDER BY id DESC")
+        columns = result.columns
+        return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def get_latest_body_weight_kg() -> float | None:
+    """Return the most recently logged body weight, or None if none yet.
+
+    This is what protein-per-kg targets on the dashboard should read
+    from -- always the latest entry, never a value that can go stale.
+    """
+    client = get_client()
+    try:
+        result = client.execute(
+            "SELECT weight_kg FROM body_weight_log ORDER BY id DESC LIMIT 1"
+        )
         if not result.rows:
             return None
         return float(result.rows[0][0])
@@ -312,20 +383,74 @@ def get_body_weight_kg() -> float | None:
         client.close()
 
 
-def set_body_weight_kg(body_weight_kg: float) -> None:
-    """Create or update the user's current body weight in kilograms."""
+def log_sleep(hours: float) -> None:
+    """Append a new sleep entry, dated to TODAY.
+
+    People usually report sleep in the morning, referring to last
+    night -- but we keep this simple and just stamp "today" rather than
+    trying to guess "last night" as a separate date. Good enough for a
+    personal tracker; easy to revisit later if it ever feels off.
+    """
     client = get_client()
     try:
         client.execute(
+            "INSERT INTO sleep_log (timestamp, hours) VALUES (?, ?)",
+            [datetime.now().isoformat(timespec="seconds"), hours],
+        )
+    finally:
+        client.close()
+
+
+def fetch_sleep_log() -> list[dict]:
+    """Return every logged sleep entry, most recent first."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT * FROM sleep_log ORDER BY id DESC")
+        columns = result.columns
+        return [dict(zip(columns, row)) for row in result.rows]
+    finally:
+        client.close()
+
+
+def set_profile_info(age: int | None = None, height_cm: float | None = None) -> None:
+    """Update age and/or height. Pass only the field(s) that changed --
+    the other keeps whatever was already stored.
+
+    Unlike weight/sleep, age and height don't need history, so this
+    overwrites the single stored value in place instead of appending.
+    """
+    client = get_client()
+    try:
+        current = client.execute("SELECT age, height_cm FROM profile WHERE id = 1")
+        existing_age = current.rows[0][0] if current.rows else None
+        existing_height = current.rows[0][1] if current.rows else None
+
+        new_age = age if age is not None else existing_age
+        new_height = height_cm if height_cm is not None else existing_height
+
+        client.execute(
             """
-            INSERT INTO profile (id, body_weight_kg, updated_at)
-            VALUES (1, ?, ?)
+            INSERT INTO profile (id, age, height_cm, updated_at)
+            VALUES (1, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
-                body_weight_kg = excluded.body_weight_kg,
+                age = excluded.age,
+                height_cm = excluded.height_cm,
                 updated_at = excluded.updated_at
             """,
-            [body_weight_kg, datetime.now().isoformat(timespec="seconds")],
+            [new_age, new_height, datetime.now().isoformat(timespec="seconds")],
         )
+    finally:
+        client.close()
+
+
+def get_profile_info() -> dict:
+    """Return {'age': ..., 'height_cm': ...}, with None for anything not yet set."""
+    client = get_client()
+    try:
+        result = client.execute("SELECT age, height_cm FROM profile WHERE id = 1")
+        if not result.rows:
+            return {"age": None, "height_cm": None}
+        return {"age": result.rows[0][0], "height_cm": result.rows[0][1]}
     finally:
         client.close()
 
@@ -477,3 +602,14 @@ def delete_strength_set(set_id: int) -> None:
         client.execute("DELETE FROM strength_sets WHERE id = ?", [set_id])
     finally:
         client.close()
+
+
+def _get_existing_columns(client: libsql_client.Client, table_name: str) -> set[str]:
+    """Return the set of column names currently on the given table.
+
+    Made generic (was meals-only before) so it can also check the
+    `profile` table when we add age/height columns to it below.
+    """
+    result = client.execute(f"PRAGMA table_info({table_name})")
+    name_index = result.columns.index("name")
+    return {row[name_index] for row in result.rows}
